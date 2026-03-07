@@ -1,0 +1,28 @@
+# Virtual env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local / secrets (if any later)
+.env
+.env.local
+*.local
+
+# Large test media (optional)
+# *.mp3
+# *.mp4
+# *.wav
