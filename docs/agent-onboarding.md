@@ -2,21 +2,22 @@
 
 ## Назначение проекта
 
-Локальная утилита для транскрибации аудио и видео в текст (русский). Результаты сохраняются в .txt и .json (с таймкодами) для последующего анализа через AI-агента (рефлексия по созвонам, подсветки, аналитика).
+Локальная утилита для транскрибации аудио и видео в текст (русский). Результаты сохраняются в .txt и .json (с таймкодами) для последующего анализа через AI-агента (рефлексия по созвонам, подсветки, аналитика). В том же репозитории — **Telegram-бот**: голосовое сообщение → текст (запуск на сервере).
 
 ## Стек
 
 - Python 3.10+
 - faster-whisper (локальное распознавание речи)
-- ffmpeg (внешняя зависимость) — извлечение аудио из видео
+- ffmpeg (внешняя зависимость) — извлечение аудио из видео, конвертация .oga (голосовые Telegram)
+- aiogram 3 — только для Telegram-бота
 
 ## Структура проекта
 
 - `ROADMAP_TRANSCRIBATOR.md` — планы
 - `DONE_LIST_TRANSCRIBATOR.md` — выполненные задачи
 - `SESSION_SUMMARY_YYYY-MM-DD.md` — последняя сессия
-- `docs/specs/` — спецификации (01-mvp-transcriber.md)
-- Исходный код: корень или пакет `transcribator/` по усмотрению
+- `docs/specs/` — спецификации; `docs/bot.md` — запуск и деплой бота
+- Пакет `transcribator/`: core, cli, gui, **bot** (Telegram), audio_utils
 
 ## Правила
 
@@ -33,6 +34,9 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m transcribator path\to\audio.mp3 path\to\video.mp4
+python -m transcribator.gui
+# Бот (на сервере, с токеном в env):
+python -m transcribator.bot
 ```
 
 ---

@@ -1,2 +1,5 @@
-# Transcribator MVP: local speech-to-text (Russian)
+# Transcribator: local speech-to-text (Russian)
 faster-whisper>=1.0.0
+
+# Telegram bot (optional: only if running the bot)
+aiogram>=3.0.0

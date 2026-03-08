@@ -1,0 +1,36 @@
+# Пример systemd-unit для бота Transcribator (24/7).
+# 
+# 1. Скопировать в /etc/systemd/system/:
+#    sudo cp docs/bot.service.example /etc/systemd/system/transcribator-bot.service
+#
+# 2. Создать файл с токеном (не коммитить!):
+#    sudo nano /etc/systemd/system/transcribator-bot.env
+#    Содержимое одной строкой:
+#    TRANSCRIBATOR_BOT_TOKEN=123456:ABC-...
+#
+# 3. В юните подставить свой путь к проекту и пользователя:
+#    sudo nano /etc/systemd/system/transcribator-bot.service
+#
+# 4. Включить и запустить:
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable transcribator-bot
+#    sudo systemctl start transcribator-bot
+#    sudo systemctl status transcribator-bot
+#
+# Логи: journalctl -u transcribator-bot -f
+
+[Unit]
+Description=Transcribator Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/transcribator
+EnvironmentFile=/etc/systemd/system/transcribator-bot.env
+ExecStart=/home/YOUR_USER/transcribator/.venv/bin/python -m transcribator.bot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
