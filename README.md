@@ -11,6 +11,7 @@
 - **Python 3.10+**
 - **ffmpeg** — для извлечения аудио из видео (должен быть в PATH).
 - Достаточно RAM и места на диске для модели Whisper (модель `small` — порядка 500 MB).
+- **GPU NVIDIA (опционально):** для ускорения в GUI/CLI через CUDA на Windows обычно нужны pip-пакеты `nvidia-cublas-cu12` и `nvidia-cudnn-cu12` (~1.2 GB). Подробности — [docs/gui-and-gpu-windows.md](docs/gui-and-gpu-windows.md).
 
 ## Установка
 
@@ -32,6 +33,22 @@ ffmpeg -version
 
 Если ffmpeg не установлен: скачай с [ffmpeg.org](https://ffmpeg.org/download.html) или через `winget install ffmpeg` (Windows) и добавь в PATH.
 
+4. **Ускорение на GPU (Windows, NVIDIA):** при необходимости установи в том же `.venv`:
+
+```powershell
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+
+При импорте пакета `transcribator` DLL из `site-packages\nvidia\...\bin` регистрируются автоматически (см. [docs/gui-and-gpu-windows.md](docs/gui-and-gpu-windows.md)).
+
+## Документация
+
+| Документ | Содержание |
+|----------|------------|
+| [docs/gui-and-gpu-windows.md](docs/gui-and-gpu-windows.md) | GUI: прогресс, устройство, устойчивость; GPU/CUDA на Windows; переменные окружения ядра; журнал `gui_crash.log`; устранение неполадок |
+| [docs/bot.md](docs/bot.md) | Telegram-бот: переменные, systemd, запуск на сервере |
+| [docs/agent-onboarding.md](docs/agent-onboarding.md) | Краткий онбординг для агента |
+
 ## Использование
 
 ### Вариант 1: Окно для десктопа (удобнее)
@@ -42,7 +59,9 @@ ffmpeg -version
 python -m transcribator.gui
 ```
 
-Откроется окно: добавь файлы (аудио/видео), при необходимости укажи папку для результатов и модель, нажми «Запустить транскрибацию». Лог показывается в том же окне.
+Откроется окно: добавь файлы (аудио/видео), при необходимости укажи папку для результатов, **модель** и **устройство** (`auto` / `cuda` / `cpu`), нажми «Запустить транскрибацию». Лог и **прогресс (процент, ETA, очередь)** — в том же окне.
+
+Двойной щелчок по `Запуск Transcribator.bat` в корне проекта — то же окно через `pythonw` (без консоли). Если окно «тихо» закрылось, см. журнал: `%LOCALAPPDATA%\Transcribator\gui_crash.log` (подробнее в [docs/gui-and-gpu-windows.md](docs/gui-and-gpu-windows.md)).
 
 ### Вариант 2: Командная строка (CLI)
 
@@ -89,7 +108,7 @@ python -m transcribator файл.mp3 -v
 
 ## Структура проекта
 
-- `transcribator/` — пакет (core, CLI, GUI, **бот для Telegram**, работа с аудио).
+- `transcribator/` — пакет (core, CLI, GUI, **бот для Telegram**, работа с аудио; `_win_cuda_dlls.py` — DLL для CUDA на Windows).
 - `docs/` — база знаний и спецификации.
 - `ROADMAP_TRANSCRIBATOR.md`, `DONE_LIST_TRANSCRIBATOR.md`, `SESSION_SUMMARY_*.md` — по правилам Cursor_Projects.
 

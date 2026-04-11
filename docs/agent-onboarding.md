@@ -16,8 +16,10 @@
 - `ROADMAP_TRANSCRIBATOR.md` — планы
 - `DONE_LIST_TRANSCRIBATOR.md` — выполненные задачи
 - `SESSION_SUMMARY_YYYY-MM-DD.md` — последняя сессия
-- `docs/specs/` — спецификации; `docs/bot.md` — запуск и деплой бота
-- Пакет `transcribator/`: core, cli, gui, **bot** (Telegram), audio_utils
+- `docs/specs/` — спецификации
+- **`docs/gui-and-gpu-windows.md`** — GUI (прогресс, устройство, стабильность), GPU/CUDA на Windows, переменные окружения ядра, `gui_crash.log`
+- `docs/bot.md` — запуск и деплой Telegram-бота
+- Пакет `transcribator/`: core, cli, gui, **bot** (Telegram), audio_utils, `_win_cuda_dlls.py` (Windows + CUDA)
 
 ## Правила
 
@@ -41,4 +43,4 @@ python -m transcribator.bot
 
 ---
 
-**Последнее обновление:** 2026-03-07
+**Последнее обновление:** 2026-04-09

@@ -1,5 +1,10 @@
 # Transcribator: local speech-to-text (Russian)
 faster-whisper>=1.0.0
 
+# Windows GPU (optional, large wheels ~1.2 GB): required for CUDA inference with CTranslate2
+# when the CUDA Toolkit is not on PATH. After install, transcribator registers DLL dirs on import.
+# pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# Остальные опции ядра (VAD, таймаут, и т.д.): docs/gui-and-gpu-windows.md
+
 # Telegram bot (optional: only if running the bot)
 aiogram>=3.0.0
