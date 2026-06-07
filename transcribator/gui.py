@@ -3,6 +3,7 @@ Desktop GUI for Transcribator: select files, choose output dir and model, run tr
 Run: python -m transcribator.gui
 """
 import gc
+import json
 import logging
 import os
 import queue
@@ -86,9 +87,40 @@ def _run_transcription(
     output_dir: Path | None,
     model_name: str,
     device_mode: str,
-    log_queue: queue.Queue[str | ProgressEvent],
+    log_queue: queue.Queue[str | ProgressEvent | WorkerResult],
 ) -> None:
     """Worker: transcribe each file, put messages into log_queue."""
+    def validate_outputs(txt_path: Path, json_path: Path) -> tuple[bool, str]:
+        if not txt_path.exists() or not json_path.exists():
+            return False, "Не найдены выходные файлы (.txt/.json)."
+        try:
+            txt_size = txt_path.stat().st_size
+            json_size = json_path.stat().st_size
+        except OSError as e:
+            return False, f"Не удалось проверить размер файлов: {e}"
+        if txt_size <= 0 or json_size <= 0:
+            return False, "Один из выходных файлов пустой."
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return False, f"JSON поврежден или не читается: {e}"
+        if not isinstance(payload, dict):
+            return False, "JSON имеет неверный формат (ожидался объект)."
+        if "segments" not in payload or not isinstance(payload.get("segments"), list):
+            return False, "JSON не содержит корректное поле segments."
+        return True, ""
+
+    try:
+        gui_file_timeout = int(
+            os.environ.get("TRANSCRIBATOR_GUI_FILE_TIMEOUT_SECONDS", "0") or "0"
+        )
+    except ValueError:
+        gui_file_timeout = 0
+
+    ok_count = 0
+    skip_count = 0
+    fail_count = 0
+
     use_gpu = False
     if device_mode == "cpu":
         log_queue.put("Режим устройства: CPU (выбран вручную).")
@@ -115,28 +147,60 @@ def _run_transcription(
         log_queue.put(f"[{i}/{len(files)}] Обработка: {path.name}")
         try:
             selected_device = "cuda" if use_gpu else "cpu"
+            out_base_dir = output_dir or path.parent
+            out_txt = out_base_dir / f"{path.stem}.txt"
+            out_json = out_base_dir / f"{path.stem}.json"
 
-            def on_progress(percent: float | None, eta_seconds: float | None) -> None:
+            if out_txt.exists() and out_json.exists():
+                log_queue.put("  → Пропуск: результаты уже существуют (.txt + .json).")
                 log_queue.put(
                     ProgressEvent(
                         file_index=i,
                         file_count=len(files),
                         file_name=path.name,
-                        progress_percent=percent,
-                        eta_seconds=eta_seconds,
+                        progress_percent=100.0,
+                        eta_seconds=0.0,
                     )
                 )
+                skip_count += 1
+                continue
 
+            # Run each file in a child process to isolate native crashes in
+            # faster-whisper/ctranslate2 and keep GUI alive for the next files.
+            log_queue.put(
+                ProgressEvent(
+                    file_index=i,
+                    file_count=len(files),
+                    file_name=path.name,
+                    progress_percent=0.0,
+                    eta_seconds=None,
+                )
+            )
             txt_path, json_path = transcribe_file(
                 path,
                 output_dir=output_dir,
                 model_name=model_name,
                 device=selected_device,
                 language="ru",
-                progress_callback=on_progress,
+                progress_callback=None,
+                isolate_process=True,
+                max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
+            )
+            valid, reason = validate_outputs(txt_path, json_path)
+            if not valid:
+                raise RuntimeError(f"Файлы созданы, но проверка результата не пройдена: {reason}")
+            log_queue.put(
+                ProgressEvent(
+                    file_index=i,
+                    file_count=len(files),
+                    file_name=path.name,
+                    progress_percent=100.0,
+                    eta_seconds=0.0,
+                )
             )
             device_label = "GPU" if selected_device == "cuda" else "CPU"
             log_queue.put(f"  → Готово ({device_label}): {txt_path.name}, {json_path.name}")
+            ok_count += 1
         except RuntimeError as e:
             if use_gpu and device_mode == "auto" and _is_cuda_error(e):
                 log_queue.put("  → CUDA ошибка, переключаюсь на CPU для этого файла…")
@@ -147,17 +211,52 @@ def _run_transcription(
                         model_name=model_name,
                         device="cpu",
                         language="ru",
-                        progress_callback=on_progress,
+                        progress_callback=None,
+                        isolate_process=True,
+                        max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
+                    )
+                    valid, reason = validate_outputs(txt_path, json_path)
+                    if not valid:
+                        raise RuntimeError(
+                            f"Файлы созданы, но проверка результата не пройдена: {reason}"
+                        )
+                    log_queue.put(
+                        ProgressEvent(
+                            file_index=i,
+                            file_count=len(files),
+                            file_name=path.name,
+                            progress_percent=100.0,
+                            eta_seconds=0.0,
+                        )
                     )
                     log_queue.put(f"  → Готово (CPU): {txt_path.name}, {json_path.name}")
+                    ok_count += 1
                 except Exception as cpu_error:
                     log_queue.put(f"  → Ошибка (CPU): {cpu_error}")
+                    fail_count += 1
             else:
                 log_queue.put(f"  → Ошибка: {e}")
+                fail_count += 1
         except Exception as e:
             log_queue.put(f"  → Ошибка: {e}")
-    log_queue.put("[Готово] Все файлы обработаны.")
-    log_queue.put(WorkerResult(success=True))
+            fail_count += 1
+    total_count = len(files)
+    log_queue.put(
+        f"[Итог] Очередь завершена: успешно={ok_count}, пропущено={skip_count}, ошибок={fail_count}, всего={total_count}."
+    )
+    if fail_count == 0:
+        log_queue.put("[Готово] Все файлы обработаны без ошибок.")
+        log_queue.put(WorkerResult(success=True))
+    else:
+        log_queue.put("[Готово с ошибками] Часть файлов не обработана, см. лог выше.")
+        log_queue.put(
+            WorkerResult(
+                success=False,
+                error_message=(
+                    f"Обработка завершена с ошибками: {fail_count} из {total_count} файлов не удалось обработать."
+                ),
+            )
+        )
 
 
 def run_gui() -> None:

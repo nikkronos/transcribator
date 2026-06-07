@@ -23,15 +23,15 @@
 
 ## Правила
 
-- Следовать Main_docs (RULES_CURSOR.md, QUICK_START_AGENT.md, AGENT_PROMPTS.md).
-- Репозиторий: отдельный новый репо (не Cursor_Projects).
+- Следовать корневым `CLAUDE.md`, `Main_docs/RULES.md` и `Main_docs/AGENT_PROMPTS.md`.
+- Репозиторий: отдельный новый репо (не AI_Projects).
 - Коммиты и push выполняет пользователь по командам от агента.
 - Секреты не хардкодить; при появлении ключей — env или аргументы.
 
 ## Полезные команды (примеры)
 
 ```powershell
-cd "C:\Users\krono\OneDrive\Рабочий стол\Cursor_Projects\Projects\Transcribator"
+cd "C:\Users\krono\OneDrive\Рабочий стол\AI_Projects\Projects\Transcribator"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt

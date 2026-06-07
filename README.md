@@ -110,8 +110,9 @@ python -m transcribator файл.mp3 -v
 
 - `transcribator/` — пакет (core, CLI, GUI, **бот для Telegram**, работа с аудио; `_win_cuda_dlls.py` — DLL для CUDA на Windows).
 - `docs/` — база знаний и спецификации.
-- `ROADMAP_TRANSCRIBATOR.md`, `DONE_LIST_TRANSCRIBATOR.md`, `SESSION_SUMMARY_*.md` — по правилам Cursor_Projects.
+- `ROADMAP_TRANSCRIBATOR.md`, `DONE_LIST_TRANSCRIBATOR.md`, `SESSION_SUMMARY_*.md` — по правилам AI_Projects.
 
 ## Репозиторий
 
-Отдельный репозиторий (не в составе Cursor_Projects). После создания репо на GitHub можно добавить remote и пушить из этой папки.
+Локальный каталог входит в корневой репозиторий `AI_Projects`. Перед коммитом
+проверяй Git-root из этой папки командой `git rev-parse --show-toplevel`.

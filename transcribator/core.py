@@ -239,6 +239,28 @@ def _transcribe_file_impl(
                 logger.warning("Could not remove temp file %s: %s", temp_audio, e)
 
 
+def _outputs_look_valid(out_txt: Path, out_json: Path) -> bool:
+    """Best-effort validation for already produced outputs."""
+    if not out_txt.exists() or not out_json.exists():
+        return False
+    try:
+        if out_txt.stat().st_size <= 0 or out_json.stat().st_size <= 0:
+            return False
+    except OSError:
+        return False
+
+    try:
+        payload = json.loads(out_json.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    segments = payload.get("segments")
+    if not isinstance(segments, list):
+        return False
+    return True
+
+
 def transcribe_file(
     input_path: str | Path,
     *,
@@ -248,6 +270,8 @@ def transcribe_file(
     compute_type: str = DEFAULT_COMPUTE_TYPE,
     language: str = "ru",
     progress_callback: Callable[[float | None, float | None], None] | None = None,
+    isolate_process: bool = False,
+    max_transcribe_seconds: int | None = None,
 ) -> tuple[Path, Path]:
     """
     Transcribe one audio/video file. Writes .txt and .json next to the file
@@ -265,17 +289,29 @@ def transcribe_file(
     """
     input_path = Path(input_path).resolve()
     out_dir = Path(output_dir).resolve() if output_dir else None
+    final_out_dir = (out_dir or input_path.parent).resolve()
+    out_txt = final_out_dir / f"{input_path.stem}.txt"
+    out_json = final_out_dir / f"{input_path.stem}.json"
 
-    try:
-        max_wall = int(os.environ.get("TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS", "0") or "0")
-    except ValueError:
-        max_wall = 0
+    if max_transcribe_seconds is None:
+        try:
+            max_wall = int(
+                os.environ.get("TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS", "0") or "0"
+            )
+        except ValueError:
+            max_wall = 0
+    else:
+        max_wall = max(0, int(max_transcribe_seconds))
 
-    if max_wall > 0:
+    run_isolated = isolate_process or max_wall > 0
+
+    if run_isolated:
         if progress_callback is not None:
             logger.warning(
-                "TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS=%s: отдельный процесс, "
-                "прогресс в GUI отключён для этого файла.",
+                "Транскрибация выполняется в отдельном процессе "
+                "(isolate_process=%s, max_transcribe_seconds=%s): "
+                "прогресс-колбэк отключён для этого файла.",
+                isolate_process,
                 max_wall,
             )
         ctx = mp.get_context("spawn")
@@ -290,23 +326,47 @@ def transcribe_file(
         }
         proc = ctx.Process(target=_mp_transcribe_runner, args=(result_queue, proc_kwargs))
         proc.start()
-        proc.join(max_wall)
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(25)
+        if max_wall > 0:
+            proc.join(max_wall)
             if proc.is_alive():
-                proc.kill()
-                proc.join(15)
+                proc.terminate()
+                proc.join(25)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(15)
+                raise RuntimeError(
+                    f"Транскрибация остановлена по лимиту времени ({max_wall} с). "
+                    "Похоже на зависание декодера (известно для длинных файлов без VAD / "
+                    "с зацикливанием). Уже включены VAD и защита для длинных дорожек; "
+                    "при необходимости увеличьте TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS "
+                    "или конвертируйте файл в WAV и повторите."
+                )
+        else:
+            proc.join()
+
+        if proc.exitcode not in (0, None):
+            if _outputs_look_valid(out_txt, out_json):
+                logger.warning(
+                    "Child process exited with code %s but output files look valid: %s, %s",
+                    proc.exitcode,
+                    out_txt,
+                    out_json,
+                )
+                return out_txt, out_json
             raise RuntimeError(
-                f"Транскрибация остановлена по лимиту времени ({max_wall} с). "
-                "Похоже на зависание декодера (известно для длинных файлов без VAD / "
-                "с зацикливанием). Уже включены VAD и защита для длинных дорожек; "
-                "при необходимости увеличьте TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS "
-                "или конвертируйте файл в WAV и повторите."
+                f"Дочерний процесс транскрибации завершился аварийно "
+                f"(exit code {proc.exitcode})."
             )
         try:
-            status, *payload = result_queue.get(timeout=30)
+            status, *payload = result_queue.get(timeout=30 if max_wall > 0 else 10)
         except Exception as e:
+            if _outputs_look_valid(out_txt, out_json):
+                logger.warning(
+                    "Child process did not return queue result but output files look valid: %s, %s",
+                    out_txt,
+                    out_json,
+                )
+                return out_txt, out_json
             raise RuntimeError(
                 "Дочерний процесс завершился без результата (см. лог консоли)."
             ) from e
