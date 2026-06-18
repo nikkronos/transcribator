@@ -205,6 +205,39 @@ def _segments_by_speaker(whisper_segments: list[Any], turns: list[Any]) -> list[
     return out
 
 
+def _smooth_short_turns(
+    segments: list[dict[str, Any]], min_dur: float = 1.0
+) -> list[dict[str, Any]]:
+    """
+    Remove crosstalk fragmentation: a very short segment (< min_dur) that sits
+    between the other speaker's longer turns is almost always a misattributed
+    word, so relabel it to the longer adjacent speaker, then merge consecutive
+    same-speaker segments. Keeps normal-length turns intact.
+    """
+    if len(segments) < 3:
+        return segments
+    work = [dict(s) for s in segments]
+    for i, s in enumerate(work):
+        if (s["end"] - s["start"]) >= min_dur:
+            continue
+        prev = work[i - 1] if i > 0 else None
+        nxt = work[i + 1] if i < len(work) - 1 else None
+        if prev and nxt:
+            cand = prev if (prev["end"] - prev["start"]) >= (nxt["end"] - nxt["start"]) else nxt
+        else:
+            cand = prev or nxt
+        if cand and cand["speaker"] != s["speaker"]:
+            s["speaker"] = cand["speaker"]
+    merged: list[dict[str, Any]] = []
+    for s in work:
+        if merged and merged[-1]["speaker"] == s["speaker"]:
+            merged[-1]["end"] = s["end"]
+            merged[-1]["text"] = f"{merged[-1]['text']} {s['text']}".strip()
+        else:
+            merged.append(dict(s))
+    return merged
+
+
 def _transcribe_file_impl(
     input_path: Path,
     *,
@@ -313,8 +346,9 @@ def _transcribe_file_impl(
                     log=lambda m: logger.info("%s", m),
                 )
                 # Word-level split: speaker assigned per word, segments cut at
-                # speaker changes (accurate turn boundaries).
-                segments_data = _segments_by_speaker(segments, turns)
+                # speaker changes (accurate turn boundaries), then short crosstalk
+                # fragments smoothed away.
+                segments_data = _smooth_short_turns(_segments_by_speaker(segments, turns))
                 num_speakers_found = len({t.speaker for t in turns})
             except Exception:
                 logger.exception(
