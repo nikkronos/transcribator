@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from faster_whisper import WhisperModel
 
-from .audio_utils import ensure_audio_path
+from .audio_utils import ensure_audio_path, ensure_wav_16k_mono
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,9 @@ def _mp_transcribe_runner(result_queue: "mp.Queue", kwargs: dict[str, Any]) -> N
             compute_type=kwargs["compute_type"],
             language=kwargs["language"],
             progress_callback=None,
+            diarize=kwargs.get("diarize", False),
+            num_speakers=kwargs.get("num_speakers"),
+            diar_threshold=kwargs.get("diar_threshold"),
         )
         result_queue.put(("ok", str(paths[0]), str(paths[1])))
     except Exception as e:
@@ -121,6 +124,38 @@ def _probe_media_duration_seconds(path: Path) -> float | None:
         return None
 
 
+def _format_clock(seconds: float) -> str:
+    """Seconds -> mm:ss (or h:mm:ss) for readable transcripts."""
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    mins, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+def _build_plain_text(segments_data: list[dict[str, Any]]) -> str:
+    """Single block of text (no speakers) — original .txt format."""
+    return " ".join(s["text"].strip() for s in segments_data).strip()
+
+
+def _build_diarized_text(segments_data: list[dict[str, Any]]) -> str:
+    """Group consecutive same-speaker segments into readable, labelled turns."""
+    turns: list[tuple[str, float, list[str]]] = []
+    for s in segments_data:
+        speaker = s.get("speaker", "Спикер 1")
+        text = s["text"].strip()
+        if turns and turns[-1][0] == speaker:
+            turns[-1][2].append(text)
+        else:
+            turns.append((speaker, float(s.get("start", 0.0)), [text]))
+    blocks = [
+        f"[{_format_clock(start)}] {speaker}:\n{' '.join(t for t in texts if t).strip()}"
+        for speaker, start, texts in turns
+    ]
+    return ("\n\n".join(blocks).strip() + "\n") if blocks else ""
+
+
 def _transcribe_file_impl(
     input_path: Path,
     *,
@@ -130,6 +165,9 @@ def _transcribe_file_impl(
     compute_type: str,
     language: str,
     progress_callback: Callable[[float | None, float | None], None] | None,
+    diarize: bool = False,
+    num_speakers: int | None = None,
+    diar_threshold: float | None = None,
 ) -> tuple[Path, Path]:
     """Internal transcription (single process). See transcribe_file() for env options."""
     if not input_path.exists():
@@ -145,7 +183,11 @@ def _transcribe_file_impl(
     is_temp = False
     model: WhisperModel | None = None
     try:
-        audio_path, is_temp = ensure_audio_path(input_path)
+        # Diarization needs a 16 kHz mono wav; reuse the same audio for Whisper.
+        if diarize:
+            audio_path, is_temp = ensure_wav_16k_mono(input_path)
+        else:
+            audio_path, is_temp = ensure_audio_path(input_path)
         if is_temp:
             temp_audio = audio_path
         total_duration = _probe_media_duration_seconds(audio_path)
@@ -205,15 +247,43 @@ def _transcribe_file_impl(
 
         detected_lang = getattr(info, "language", language) or language
 
-        full_text = " ".join(s.text.strip() for s in segments).strip()
-        segments_data = [
+        segments_data: list[dict[str, Any]] = [
             {"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
             for s in segments
         ]
+
+        num_speakers_found = 0
+        if diarize:
+            from .diarization import assign_speakers, diarize_wav
+
+            logger.info("Диаризация %s…", input_path.name)
+            try:
+                turns = diarize_wav(
+                    audio_path,
+                    num_speakers=num_speakers,
+                    threshold=diar_threshold,
+                    log=lambda m: logger.info("%s", m),
+                )
+                assign_speakers(segments_data, turns)
+                num_speakers_found = len({t.speaker for t in turns})
+            except Exception:
+                logger.exception(
+                    "Диаризация не удалась для %s — сохраняю без спикеров.",
+                    input_path.name,
+                )
+                diarize = False
+
+        full_text = (
+            _build_diarized_text(segments_data)
+            if diarize
+            else _build_plain_text(segments_data)
+        )
         out_json_data: dict[str, Any] = {
             "source_file": str(input_path.name),
             "language": detected_lang,
             "model": model_name,
+            "diarization": bool(diarize),
+            "num_speakers": num_speakers_found,
             "segments": segments_data,
         }
 
@@ -272,10 +342,21 @@ def transcribe_file(
     progress_callback: Callable[[float | None, float | None], None] | None = None,
     isolate_process: bool = False,
     max_transcribe_seconds: int | None = None,
+    diarize: bool = False,
+    num_speakers: int | None = None,
+    diar_threshold: float | None = None,
 ) -> tuple[Path, Path]:
     """
     Transcribe one audio/video file. Writes .txt and .json next to the file
     (or into output_dir if given). Returns (path_txt, path_json).
+
+    Diarization (optional):
+    - diarize=True adds speaker labels ("кто говорит"). The .txt is grouped into
+      readable speaker turns; each .json segment gets a "speaker" field. Uses the
+      torch-free sherpa-onnx diarizer (CPU); models download once and are cached.
+    - num_speakers: force an exact speaker count if known (else inferred).
+    - diar_threshold: clustering threshold (lower -> more speakers; default ~0.5).
+    If diarization fails, output falls back to the plain (no-speaker) format.
 
     Environment (optional):
     - TRANSCRIBATOR_MAX_TRANSCRIBE_SECONDS: if > 0, run in a separate process and
@@ -323,6 +404,9 @@ def transcribe_file(
             "device": device,
             "compute_type": compute_type,
             "language": language,
+            "diarize": diarize,
+            "num_speakers": num_speakers,
+            "diar_threshold": diar_threshold,
         }
         proc = ctx.Process(target=_mp_transcribe_runner, args=(result_queue, proc_kwargs))
         proc.start()
@@ -382,4 +466,7 @@ def transcribe_file(
         compute_type=compute_type,
         language=language,
         progress_callback=progress_callback,
+        diarize=diarize,
+        num_speakers=num_speakers,
+        diar_threshold=diar_threshold,
     )

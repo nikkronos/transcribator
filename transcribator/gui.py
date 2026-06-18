@@ -87,6 +87,7 @@ def _run_transcription(
     output_dir: Path | None,
     model_name: str,
     device_mode: str,
+    diarize: bool,
     log_queue: queue.Queue[str | ProgressEvent | WorkerResult],
 ) -> None:
     """Worker: transcribe each file, put messages into log_queue."""
@@ -135,6 +136,12 @@ def _run_transcription(
         else:
             short_reason = (reason or "неизвестная ошибка").strip()
             log_queue.put(f"Режим устройства: AUTO -> CPU (CUDA недоступна: {short_reason}).")
+
+    if diarize:
+        log_queue.put(
+            "Диаризация включена: определяю, кто говорит "
+            "(модели скачиваются один раз, считается на CPU)."
+        )
 
     for i, path in enumerate(files, 1):
         path = path.resolve()
@@ -185,6 +192,7 @@ def _run_transcription(
                 progress_callback=None,
                 isolate_process=True,
                 max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
+                diarize=diarize,
             )
             valid, reason = validate_outputs(txt_path, json_path)
             if not valid:
@@ -214,6 +222,7 @@ def _run_transcription(
                         progress_callback=None,
                         isolate_process=True,
                         max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
+                        diarize=diarize,
                     )
                     valid, reason = validate_outputs(txt_path, json_path)
                     if not valid:
@@ -366,6 +375,14 @@ def run_gui() -> None:
     )
     device_combo.grid(row=3, column=1, sticky="w", padx=4, pady=4)
 
+    diarize_var = tk.BooleanVar(value=False)
+    diarize_check = ttk.Checkbutton(
+        frm_opts,
+        text="Диаризация (кто говорит) — определять спикеров",
+        variable=diarize_var,
+    )
+    diarize_check.grid(row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 4))
+
     # --- Log ---
     frm_log = ttk.LabelFrame(root, text="Лог")
     frm_log.grid(row=2, column=0, padx=10, pady=6, sticky="nsew")
@@ -514,6 +531,7 @@ def run_gui() -> None:
         selected_device_mode = device_var.get()
         if selected_device_mode not in DEVICE_MODES:
             selected_device_mode = "auto"
+        diarize_enabled = bool(diarize_var.get())
         is_running = True
         current_file_name = ""
         last_progress_update = time.monotonic()
@@ -540,6 +558,7 @@ def run_gui() -> None:
                     output_dir,
                     model_name,
                     selected_device_mode,
+                    diarize_enabled,
                     log_queue,
                 )
             except Exception as e:

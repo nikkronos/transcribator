@@ -50,6 +50,23 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Device (default: cpu)",
     )
     parser.add_argument(
+        "--diarize",
+        action="store_true",
+        help="Speaker diarization: label who speaks (кто говорит) in .txt and .json",
+    )
+    parser.add_argument(
+        "--speakers",
+        type=int,
+        default=None,
+        help="Exact number of speakers if known (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--diar-threshold",
+        type=float,
+        default=None,
+        help="Diarization clustering threshold (lower = more speakers; default ~0.5)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -80,6 +97,9 @@ def run(args: list[str] | None = None) -> int:
                 model_name=parsed.model,
                 device=parsed.device,
                 language="ru",
+                diarize=parsed.diarize,
+                num_speakers=parsed.speakers,
+                diar_threshold=parsed.diar_threshold,
             )
         except FileNotFoundError as e:
             logger.error("%s", e)

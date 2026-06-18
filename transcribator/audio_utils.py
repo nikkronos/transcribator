@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import wave
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,40 @@ def ensure_audio_path(input_path: str | Path) -> tuple[Path, bool]:
             )
         return _convert_audio_to_wav(path), True
     return path, False
+
+
+def _is_wav_16k_mono(path: Path) -> bool:
+    """True if path is a 16 kHz mono 16-bit PCM wav (ready for diarization as-is)."""
+    if path.suffix.lower() != ".wav":
+        return False
+    try:
+        with wave.open(str(path), "rb") as w:
+            return (
+                w.getnchannels() == CHANNELS
+                and w.getframerate() == SAMPLE_RATE
+                and w.getsampwidth() == 2
+            )
+    except (wave.Error, OSError):
+        return False
+
+
+def ensure_wav_16k_mono(input_path: str | Path) -> tuple[Path, bool]:
+    """
+    Return a 16 kHz mono 16-bit PCM wav suitable for both faster-whisper and the
+    sherpa-onnx diarizer. Converts via ffmpeg when needed.
+    Returns (path_to_wav, is_temporary). Caller must remove temp files.
+    """
+    path = Path(input_path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    if _is_wav_16k_mono(path):
+        return path, False
+    if not _ffmpeg_available():
+        raise RuntimeError(
+            "ffmpeg is required to prepare audio for diarization. "
+            "Install ffmpeg and add it to PATH."
+        )
+    return _convert_audio_to_wav(path), True
 
 
 def _extract_audio_to_temp(video_path: Path) -> Path:

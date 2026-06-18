@@ -6,9 +6,10 @@
 
 ## Стек
 
-- Python 3.10+
-- faster-whisper (локальное распознавание речи)
-- ffmpeg (внешняя зависимость) — извлечение аудио из видео, конвертация .oga (голосовые Telegram)
+- Python 3.10+ (рабочее окружение владельца — 3.14; учти: у torch нет CUDA-колёс под 3.14, поэтому диаризатор намеренно torch-free)
+- faster-whisper (локальное распознавание речи; на GPU через CTranslate2, не torch)
+- sherpa-onnx (диаризация «кто говорит»: ONNX, без torch/токенов, CPU; модуль `transcribator/diarization.py`)
+- ffmpeg (внешняя зависимость) — извлечение аудио из видео, конвертация .oga (голосовые Telegram), 16 кГц моно WAV для диаризации
 - aiogram 3 — только для Telegram-бота
 
 ## Структура проекта
@@ -19,7 +20,7 @@
 - `docs/specs/` — спецификации
 - **`docs/gui-and-gpu-windows.md`** — GUI (прогресс, устройство, стабильность), GPU/CUDA на Windows, переменные окружения ядра, `gui_crash.log`
 - `docs/bot.md` — запуск и деплой Telegram-бота
-- Пакет `transcribator/`: core, cli, gui, **bot** (Telegram), audio_utils, `_win_cuda_dlls.py` (Windows + CUDA)
+- Пакет `transcribator/`: core, cli, gui, **bot** (Telegram), **diarization** (sherpa-onnx), audio_utils, `_win_cuda_dlls.py` (Windows + CUDA)
 
 ## Правила
 
@@ -43,4 +44,4 @@ python -m transcribator.bot
 
 ---
 
-**Последнее обновление:** 2026-04-09
+**Последнее обновление:** 2026-06-18
