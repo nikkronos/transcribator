@@ -34,14 +34,19 @@ _SEG_URL = (
 _SEG_MEMBER_SUFFIX = "model.onnx"  # file inside the tar.bz2 we need
 _SEG_FILENAME = "pyannote-segmentation-3-0.onnx"
 
+# 3D-Speaker CAM++ embedding: fast on CPU and clusters better than TitaNet for
+# diarization (measured on real recordings). Speaker embeddings are largely
+# language-independent, so this works for Russian.
 _EMB_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "speaker-recongition-models/nemo_en_titanet_small.onnx"
+    "speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
 )
-_EMB_FILENAME = "nemo_en_titanet_small.onnx"
+_EMB_FILENAME = "3dspeaker_campplus_sv_zh-cn_16k-common.onnx"
 
-# Clustering default: lower threshold -> more speakers, higher -> fewer.
-_DEFAULT_THRESHOLD = 0.5
+# Clustering default (used only when the speaker count is NOT fixed): lower
+# threshold -> more speakers, higher -> fewer. Auto-detection over-segments on
+# long recordings regardless of model, so prefer passing num_speakers when known.
+_DEFAULT_THRESHOLD = 0.7
 
 
 @dataclass
@@ -147,22 +152,27 @@ def diarize_wav(
     *,
     num_speakers: int | None = None,
     threshold: float | None = None,
-    num_threads: int = 2,
+    num_threads: int | None = None,
     progress_callback: Callable[[float], None] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> list[SpeakerTurn]:
     """
     Diarize a 16 kHz mono wav. Returns speaker turns sorted by start time.
 
-    num_speakers: if known (>0), force exactly this many speakers; otherwise
-                  speaker count is inferred via clustering `threshold`.
-    threshold:    clustering distance (default 0.5). Lower -> more speakers.
+    num_speakers: if known (>0), force exactly this many speakers — strongly
+                  recommended, since auto-detection over-segments on long files.
+    threshold:    clustering distance used only when num_speakers is not set
+                  (default 0.7). Lower -> more speakers.
+    num_threads:  CPU threads (default: ~2/3 of cores) — diarization is the slow,
+                  CPU-bound step, so more threads = faster.
     """
     import sherpa_onnx as so  # imported lazily: heavy native lib
 
     _log = log or (lambda m: logger.info("%s", m))
     seg_model, emb_model = ensure_models(_log)
 
+    if num_threads is None:
+        num_threads = max(2, min(8, (os.cpu_count() or 4) * 2 // 3))
     thr = _DEFAULT_THRESHOLD if threshold is None else float(threshold)
     n_clusters = int(num_speakers) if (num_speakers and num_speakers > 0) else -1
 

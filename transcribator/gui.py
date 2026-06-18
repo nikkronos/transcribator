@@ -88,6 +88,7 @@ def _run_transcription(
     model_name: str,
     device_mode: str,
     diarize: bool,
+    num_speakers: int | None,
     log_queue: queue.Queue[str | ProgressEvent | WorkerResult],
 ) -> None:
     """Worker: transcribe each file, put messages into log_queue."""
@@ -138,9 +139,15 @@ def _run_transcription(
             log_queue.put(f"Режим устройства: AUTO -> CPU (CUDA недоступна: {short_reason}).")
 
     if diarize:
+        who = (
+            f"{num_speakers} спикер(ов)"
+            if num_speakers and num_speakers > 0
+            else "авто (число спикеров не задано)"
+        )
         log_queue.put(
-            "Диаризация включена: определяю, кто говорит "
-            "(модели скачиваются один раз, считается на CPU)."
+            f"Диаризация включена: {who}. Считается на CPU ПОСЛЕ транскрибации — "
+            "на длинных файлах это занимает несколько минут без отдельного прогресса. "
+            "Модели скачиваются один раз."
         )
 
     for i, path in enumerate(files, 1):
@@ -158,7 +165,17 @@ def _run_transcription(
             out_txt = out_base_dir / f"{path.stem}.txt"
             out_json = out_base_dir / f"{path.stem}.json"
 
-            if out_txt.exists() and out_json.exists():
+            outputs_exist = out_txt.exists() and out_json.exists()
+            already_diarized = False
+            if out_json.exists():
+                try:
+                    prev = json.loads(out_json.read_text(encoding="utf-8"))
+                    already_diarized = bool(prev.get("diarization"))
+                except Exception:
+                    already_diarized = False
+            # Re-process if diarization is requested but the existing result has none.
+            need_diar_redo = diarize and not already_diarized
+            if outputs_exist and not need_diar_redo:
                 log_queue.put("  → Пропуск: результаты уже существуют (.txt + .json).")
                 log_queue.put(
                     ProgressEvent(
@@ -171,6 +188,10 @@ def _run_transcription(
                 )
                 skip_count += 1
                 continue
+            if outputs_exist and need_diar_redo:
+                log_queue.put(
+                    "  → Переобработка с диаризацией: добавляю спикеров к прежнему результату."
+                )
 
             # Run each file in a child process to isolate native crashes in
             # faster-whisper/ctranslate2 and keep GUI alive for the next files.
@@ -193,6 +214,7 @@ def _run_transcription(
                 isolate_process=True,
                 max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
                 diarize=diarize,
+                num_speakers=num_speakers,
             )
             valid, reason = validate_outputs(txt_path, json_path)
             if not valid:
@@ -223,6 +245,7 @@ def _run_transcription(
                         isolate_process=True,
                         max_transcribe_seconds=gui_file_timeout if gui_file_timeout > 0 else None,
                         diarize=diarize,
+                        num_speakers=num_speakers,
                     )
                     valid, reason = validate_outputs(txt_path, json_path)
                     if not valid:
@@ -381,7 +404,21 @@ def run_gui() -> None:
         text="Диаризация (кто говорит) — определять спикеров",
         variable=diarize_var,
     )
-    diarize_check.grid(row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 4))
+    diarize_check.grid(row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 2))
+
+    ttk.Label(frm_opts, text="Число спикеров (0 = авто):").grid(
+        row=5, column=0, sticky="w", padx=4, pady=(0, 4)
+    )
+    speakers_var = tk.StringVar(value="2")
+    speakers_spin = ttk.Spinbox(
+        frm_opts, from_=0, to=10, width=5, textvariable=speakers_var, state="readonly"
+    )
+    speakers_spin.grid(row=5, column=1, sticky="w", padx=4, pady=(0, 4))
+    ttk.Label(
+        frm_opts,
+        text="для интервью/созвона укажите число участников; «авто» обычно завышает",
+        foreground="gray",
+    ).grid(row=6, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 4))
 
     # --- Log ---
     frm_log = ttk.LabelFrame(root, text="Лог")
@@ -504,12 +541,15 @@ def run_gui() -> None:
             idle_seconds = int(time.monotonic() - last_progress_update)
             if idle_seconds >= 15:
                 lbl_current.config(
-                    text=f"Текущий файл: {current_file_name} (обработка, {idle_seconds}с без обновления)"
+                    text=f"Текущий файл: {current_file_name} (идёт обработка, {idle_seconds}с)"
                 )
-                lbl_current_eta.config(text="ETA: пересчитываю…")
+                lbl_current_eta.config(text="ETA: —")
                 now = time.monotonic()
                 if now - last_heartbeat_log >= 30:
-                    append_log(f"  → Обработка продолжается… {idle_seconds}с без нового сегмента.")
+                    append_log(
+                        f"  → Идёт обработка… {idle_seconds}с "
+                        "(для длинных файлов и диаризации это нормально, не зависание)."
+                    )
                     last_heartbeat_log = now
         root.after(1000, heartbeat)
 
@@ -532,6 +572,11 @@ def run_gui() -> None:
         if selected_device_mode not in DEVICE_MODES:
             selected_device_mode = "auto"
         diarize_enabled = bool(diarize_var.get())
+        try:
+            speakers_count = int(speakers_var.get())
+        except (ValueError, tk.TclError):
+            speakers_count = 0
+        num_speakers = speakers_count if speakers_count > 0 else None
         is_running = True
         current_file_name = ""
         last_progress_update = time.monotonic()
@@ -559,6 +604,7 @@ def run_gui() -> None:
                     model_name,
                     selected_device_mode,
                     diarize_enabled,
+                    num_speakers,
                     log_queue,
                 )
             except Exception as e:
