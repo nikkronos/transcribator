@@ -44,9 +44,11 @@ _EMB_URL = (
 _EMB_FILENAME = "3dspeaker_campplus_sv_zh-cn_16k-common.onnx"
 
 # Clustering default (used only when the speaker count is NOT fixed): lower
-# threshold -> more speakers, higher -> fewer. Auto-detection over-segments on
-# long recordings regardless of model, so prefer passing num_speakers when known.
-_DEFAULT_THRESHOLD = 0.7
+# threshold -> more speakers, higher -> fewer. There is NO universal value — the
+# resulting speaker count drifts with recording length (longer audio -> more
+# clusters at the same threshold), so auto-detection is unreliable. ~1.1 is the
+# right ballpark for CAM++ embeddings; always pass num_speakers when known.
+_DEFAULT_THRESHOLD = 1.1
 
 
 @dataclass
