@@ -156,6 +156,55 @@ def _build_diarized_text(segments_data: list[dict[str, Any]]) -> str:
     return ("\n\n".join(blocks).strip() + "\n") if blocks else ""
 
 
+def _segments_by_speaker(whisper_segments: list[Any], turns: list[Any]) -> list[dict[str, Any]]:
+    """
+    Build speaker-coherent segments from Whisper segments + diarization turns.
+
+    Each word is assigned to a speaker; a Whisper segment is split wherever the
+    speaker changes between consecutive words. This fixes the coarse "one speaker
+    per long segment" merge (questions glued to answers, turns torn apart).
+    Falls back to whole-segment assignment if a segment has no word timestamps.
+    """
+    from .diarization import speaker_label
+
+    out: list[dict[str, Any]] = []
+    for seg in whisper_segments:
+        words = getattr(seg, "words", None) or []
+        if not words:
+            out.append(
+                {
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "text": seg.text.strip(),
+                    "speaker": speaker_label(seg.start, seg.end, turns),
+                }
+            )
+            continue
+        cur: dict[str, Any] | None = None
+        for w in words:
+            w_start = w.start if w.start is not None else (cur["end"] if cur else seg.start)
+            w_end = w.end if w.end is not None else w_start
+            token = (w.word or "").strip()
+            if not token:
+                continue
+            label = speaker_label(w_start, w_end, turns)
+            if cur is None or cur["speaker"] != label:
+                if cur is not None:
+                    out.append(cur)
+                cur = {
+                    "start": round(w_start, 2),
+                    "end": round(w_end, 2),
+                    "text": token,
+                    "speaker": label,
+                }
+            else:
+                cur["end"] = round(w_end, 2)
+                cur["text"] = f"{cur['text']} {token}".strip()
+        if cur is not None:
+            out.append(cur)
+    return out
+
+
 def _transcribe_file_impl(
     input_path: Path,
     *,
@@ -217,6 +266,9 @@ def _transcribe_file_impl(
             language=language,
             vad_filter=vad_on,
             condition_on_previous_text=condition_prev,
+            # Word timestamps only when diarizing: needed to split a Whisper
+            # segment at the exact point where the speaker changes.
+            word_timestamps=diarize,
         )
         started_at = time.perf_counter()
         first_segment_at: float | None = None
@@ -247,14 +299,10 @@ def _transcribe_file_impl(
 
         detected_lang = getattr(info, "language", language) or language
 
-        segments_data: list[dict[str, Any]] = [
-            {"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
-            for s in segments
-        ]
-
         num_speakers_found = 0
+        segments_data: list[dict[str, Any]] | None = None
         if diarize:
-            from .diarization import assign_speakers, diarize_wav
+            from .diarization import diarize_wav
 
             logger.info("Диаризация %s…", input_path.name)
             try:
@@ -264,7 +312,9 @@ def _transcribe_file_impl(
                     threshold=diar_threshold,
                     log=lambda m: logger.info("%s", m),
                 )
-                assign_speakers(segments_data, turns)
+                # Word-level split: speaker assigned per word, segments cut at
+                # speaker changes (accurate turn boundaries).
+                segments_data = _segments_by_speaker(segments, turns)
                 num_speakers_found = len({t.speaker for t in turns})
             except Exception:
                 logger.exception(
@@ -272,6 +322,12 @@ def _transcribe_file_impl(
                     input_path.name,
                 )
                 diarize = False
+
+        if segments_data is None:
+            segments_data = [
+                {"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
+                for s in segments
+            ]
 
         full_text = (
             _build_diarized_text(segments_data)

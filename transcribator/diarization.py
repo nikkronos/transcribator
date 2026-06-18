@@ -224,35 +224,46 @@ def diarize_wav(
     return turns
 
 
+def _best_overlap_speaker(start: float, end: float, turns: list[SpeakerTurn]) -> int | None:
+    """Speaker id whose turn overlaps [start, end] the most, or None if no overlap."""
+    best_overlap = 0.0
+    best_speaker: int | None = None
+    for t in turns:
+        overlap = min(end, t.end) - max(start, t.start)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_speaker = t.speaker
+    return best_speaker
+
+
+def speaker_label(start: float, end: float, turns: list[SpeakerTurn]) -> str:
+    """
+    Human label ("Спикер N", 1-based) for the interval [start, end]: the speaker
+    whose diarization turn overlaps it most, falling back to the nearest turn.
+    Used both per-segment and per-word.
+    """
+    if not turns:
+        return "Спикер 1"
+    speaker = _best_overlap_speaker(start, end, turns)
+    if speaker is None:
+        mid = (start + end) / 2.0
+        speaker = min(
+            turns, key=lambda t: min(abs(mid - t.start), abs(mid - t.end))
+        ).speaker
+    return f"Спикер {speaker + 1}"
+
+
 def assign_speakers(
     segments: list[dict],
     turns: list[SpeakerTurn],
 ) -> None:
     """
     Annotate each transcript segment (dict with 'start','end') in place with a
-    'speaker' label ("Спикер N", 1-based) by maximum time-overlap with diarization
-    turns. Segments with no overlap get the nearest turn's speaker.
+    'speaker' label by maximum time-overlap with diarization turns. Coarse
+    (one speaker per whole segment) — for word-level accuracy see the word split
+    in core._segments_by_speaker.
     """
-    if not turns:
-        for seg in segments:
-            seg["speaker"] = "Спикер 1"
-        return
-
     for seg in segments:
         s_start = float(seg.get("start", 0.0))
         s_end = float(seg.get("end", s_start))
-        best_overlap = 0.0
-        best_speaker: int | None = None
-        for t in turns:
-            overlap = min(s_end, t.end) - max(s_start, t.start)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_speaker = t.speaker
-        if best_speaker is None:
-            # No overlap: fall back to the temporally nearest turn.
-            mid = (s_start + s_end) / 2.0
-            best_speaker = min(
-                turns,
-                key=lambda t: min(abs(mid - t.start), abs(mid - t.end)),
-            ).speaker
-        seg["speaker"] = f"Спикер {best_speaker + 1}"
+        seg["speaker"] = speaker_label(s_start, s_end, turns)
